@@ -1,0 +1,14 @@
+# Python junk
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment/IDE junk
+.venv/
+venv/
+.env
+.vscode/
+.ipynb_checkpoints/
+
+# Data/Log junk
+*.log
