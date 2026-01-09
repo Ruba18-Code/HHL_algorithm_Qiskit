@@ -6,7 +6,8 @@ from scipy.linalg import expm
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
 from qiskit.circuit.library import UnitaryGate
 from qiskit.circuit.library import PhaseEstimation
-from qiskit_aer import AerSimulator
+from qiskit_aer import AerSimulator, Aer
+from qiskit_aer.noise import (NoiseModel,ReadoutError,depolarizing_error,)
 
 import warnings
 # This ignores the specific Qiskit deprecation warnings
@@ -71,10 +72,64 @@ class HHL:
         #this ensures that C is never larger than lambda
         self.C = min_eig_projected * 0.95 
 
-    def run_and_plot(self, title="HHL Result"):
+    def get_fidelity(self, probs_1, probs_2):
+        """
+        Calculates the fidelity between two probabilty distributions in order to compare how close they are
+        F = (Sum(sqrt(p1 * p2)))^2
+        """
+
+        sqrt_prod = np.sqrt(probs_1 * probs_2)
+        
+        fidelity = np.sum(sqrt_prod) ** 2
+        
+        return fidelity
+
+    def run_and_plot(self, title="HHL Result", p_error=0 , sweep_steps=0, max_error=0.01):
         """
         This function runs the algorithm and plots the results
         """
+
+        # --------- CLASSICAL VERIFICATION --------------------------------------------
+        # We compare the quantum result against standard NumPy linear algebra.
+        x_class = np.linalg.solve(self.matrix_A, self.vector_b_raw)
+        x_norm = x_class / np.linalg.norm(x_class)
+        c_probs = np.abs(x_norm)**2
+
+        # --- POST-SELECTION ----------------------------------------------------------
+        # HHL is not deterministic. It only succeeds when the Ancilla measures '1'.
+        #we must filter the results to keep only the successful shots and transform them into probabilities
+        # This function is definded here for using it later
+        def probs_counts(counts_raw):
+            success_counts = {}
+            total_success = 0
+        
+            #'counts' is a dictionary containing:
+            # 1. bitstring of the state (key) (examples: '00', '01', '10', '11')
+            #   important: actually, the bitstring contains the state + ancilla (example, 00 state and ancilla 1: '001')
+
+            # 2.  amount of times the state has been measured (counts) (examples: 121, 1, 23...)
+            # .items() allows us to access both at the same time
+            for bs, count in counts_raw.items():
+                # if the ancilla is one
+                if bs[-1] == '1': 
+                    #add the amount of successful counts
+                    total_success += count
+                    # this converts from binary to decimal int
+                    idx = int(bs[:-1], 2)
+                    #update the amount of sucess counts for each state safely
+                    success_counts[idx] = success_counts.get(idx, 0) + count
+            
+            if total_success == 0:
+                print(f"  [Failed] 0 successful shots. This happens if C is too small or Matrix is ill-conditioned.")
+                return
+            
+            #start a vector of 0s
+            probs = np.zeros(len(self.vector_b))
+            for idx in success_counts:
+                #update with probabilities
+                probs[idx] = success_counts[idx] / total_success
+
+            return probs
 
         print(f"\n############## Running: {title} ##############")
         print("Matrix A:\n", np.round(self.matrix_A, 2))
@@ -158,57 +213,95 @@ class HHL:
         qc.measure(q_ancilla, c_meas[0])
         qc.measure(q_b, c_meas[1:]) 
 
-        # --- ------QUANTUM CIRCUIT SIMULATION -----------------------------------------
-        print("  -> Simulating Quantum Circuit...")
+                # --------- NNOISE MODEL -----------------------------------------
+        # In order to add the errors we apply them to the correspondig transpilation in quantum gates of the Phase estimation, the multicontrolled Y gates and so on
+        # The most common and possible errors are applied in order to keep fidelity with the real case
+        def noise_model(p):
+            nm = NoiseModel()
+            # CNOT error (critical for HHL)
+            nm.add_all_qubit_quantum_error(depolarizing_error(p, 2), ['cx'])
+            # 1-Qubit gate error
+            nm.add_all_qubit_quantum_error(depolarizing_error(p, 1), ['sx', 'rz', 'x', 'h'])
+            # Measurement error
+            readout_err = ReadoutError([[0.98, 0.02],[0.02, 0.98]])
+            nm.add_all_qubit_readout_error(readout_err, ['measure'])
+            return nm
+
+        # --- ------QUANTUM CIRCUIT IDEAL SIMULATION -----------------------------------------
+        print("  -> Simulating Quantum Circuit (without Noise)...")
         #will use Aer in case we want to include noise
         simulator = AerSimulator()
+        # Transpile the circuit
+        qc_transpiled = transpile(qc, simulator)
         # run simulator many times (shots)
-        result = simulator.run(transpile(qc, simulator), shots=20000).result()
+        result = simulator.run(qc_transpiled, shots=20000).result()
         #historgram (amount of times we got a specific result)
         counts = result.get_counts()
+        q_probs = probs_counts(counts)
         
-        # --- POST-SELECTION ----------------------------------------------------------
-        # HHL is not deterministic. It only succeeds when the Ancilla measures '1'.
-        #we must filter the results to keep only the successful shots.
-        success_counts = {}
-        total_success = 0
 
-        #'counts' is a dictionary containing:
-        # 1. bitstring of the state (key) (examples: '00', '01', '10', '11')
-        #   important: actually, the bitstring contains the state + ancilla (example, 00 state and ancilla 1: '001')
+                # --- ------QUANTUM CIRCUIT NOISY SIMULATION -----------------------------------------
+        if sweep_steps > 1:
+            print(f"\n  -> Simulating Quantum Circuit (with Noise)...")
 
-        # 2.  amount of times the state has been measured (counts) (examples: 121, 1, 23...)
-        # .items() allows us to access both at the same time
-        for bs, count in counts.items():
-            # if the ancilla is one
-            if bs[-1] == '1': 
-                #add the amount of successful counts
-                total_success += count
-                # this converts from binary to decimal int
-                idx = int(bs[:-1], 2)
-                #update the amount of sucess counts for each state safely
-                success_counts[idx] = success_counts.get(idx, 0) + count
+            print(f" -> Starting sweep with {sweep_steps} steps up to error {max_error}...")
+            
+            error_range = np.linspace(0, max_error, sweep_steps)
+            fidelities = []
+            
+            for p in error_range:
+                # Run with variable noise 'p'
+                res = simulator.run(qc_transpiled, shots=10000, noise_model=noise_model(p)).result()
+                probs_noisy = probs_counts(res.get_counts())
+                
+                # Calculate fidelity vs Analytical
+                # (We use the analytical solution as 'ground truth' to see when noise breaks the algorithm)
+                fid = self.get_fidelity(c_probs, probs_noisy)
+                fidelities.append(fid)
+            
+            # Plot Curve
+            plt.figure(figsize=(10, 6))
+            plt.plot(error_range, fidelities, 'o-', color='royalblue', linewidth=2, label='HHL Fidelity between Analytical and Noisy simulation')
+            plt.title(f"{title} - Robustness Analysis")
+            plt.xlabel("Error Probability (p)")
+            plt.ylabel("Fidelity")
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.show()
+
+
+        print(f"\n  -> Simulating Quantum Circuit (with Noise pr0bability {p_error})...")
+
+        # run simulator many times (shots)
+        result_noise = simulator.run(qc_transpiled, shots=20000, noise_model=noise_model(p_error)).result()
+        #histogram (amount of times we got a specific result)
+        counts_noise = result_noise.get_counts()
+        q_probs_noise = probs_counts(counts_noise)
+
+        # --------- Fidelity --------------------------------------------
+    
+        # Ideal vs Analytical
+        # Measures how well the HHL (noiseless) approximates the mathematical solution
+        fid_algo = self.get_fidelity(c_probs, q_probs)
         
-        if total_success == 0:
-            print(f"  [Failed] 0 successful shots. This happens if C is too small or Matrix is ill-conditioned.")
-            return
+        # Ideal vs Noisy 
+        # Measures how much damage the noise caused to the quantum solution
+        fid_noise = self.get_fidelity(q_probs, q_probs_noise)
 
-        #start a vector of 0s
-        q_probs = np.zeros(len(self.vector_b))
-        for idx in success_counts:
-            #update with probabilities
-            q_probs[idx] = success_counts[idx] / total_success
+        # Noisy vs Analytical 
+        # Measures how much damage the noise caused to the analytical solution, which is what will happen in a real device
+        fid_noise = self.get_fidelity(c_probs, q_probs_noise)
 
-        # --------- CLASSICAL VERIFICATION --------------------------------------------
-        # We compare the quantum result against standard NumPy linear algebra.
-        x_class = np.linalg.solve(self.matrix_A, self.vector_b_raw)
-        x_norm = x_class / np.linalg.norm(x_class)
-        c_probs = np.abs(x_norm)**2
+        print(f"\n--- FIDELITY RESULTS ---")
+        print(f" Algorithm (Ideal vs Analytical): {fid_algo:.4f}")
+        print(f" Robustness (Ideal vs Noisy): {fid_noise:.4f}")
+        print(f" Possible real experiment (Noisy vs Analytical): {fid_noise:.4f}")
 
-        #plot both results 
-        self._plot(c_probs, q_probs, title)
 
-    def _plot(self, c_probs, q_probs, title):
+        #plot all results 
+        self._plot(c_probs, q_probs, q_probs_noise, title)
+
+    def _plot(self, c_probs, q_probs, q_probs_noise, title):
         x = np.arange(len(c_probs))
         width = 0.35
         
@@ -216,7 +309,8 @@ class HHL:
         fig, ax = plt.subplots(figsize=(8, 4))
         
         ax.bar(x - width/2, c_probs, width, label='Analytical (True)', color='navy')
-        ax.bar(x + width/2, q_probs, width, label='HHL (Quantum)', color='cornflowerblue')
+        ax.bar(x, q_probs, width, label='HHL (Quantum)', color='cornflowerblue')
+        ax.bar(x + width/2, q_probs_noise, width, label='HHL with Noise (Quantum)', color='green')
         
         ax.set_title(title)
         ax.set_ylabel('Probability |x|^2')
