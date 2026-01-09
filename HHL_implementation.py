@@ -213,7 +213,7 @@ class HHL:
         qc.measure(q_ancilla, c_meas[0])
         qc.measure(q_b, c_meas[1:]) 
 
-                # --------- NNOISE MODEL -----------------------------------------
+                # --------- NOISE MODEL -----------------------------------------
         # In order to add the errors we apply them to the correspondig transpilation in quantum gates of the Phase estimation, the multicontrolled Y gates and so on
         # The most common and possible errors are applied in order to keep fidelity with the real case
         def noise_model(p):
@@ -223,7 +223,7 @@ class HHL:
             # 1-Qubit gate error
             nm.add_all_qubit_quantum_error(depolarizing_error(p, 1), ['sx', 'rz', 'x', 'h'])
             # Measurement error
-            readout_err = ReadoutError([[0.98, 0.02],[0.02, 0.98]])
+            readout_err = ReadoutError([[0.98, 0.02],[0.02, 0.98]])  # Typical readout erro values for an IBM computer
             nm.add_all_qubit_readout_error(readout_err, ['measure'])
             return nm
 
@@ -254,8 +254,8 @@ class HHL:
                 res = simulator.run(qc_transpiled, shots=10000, noise_model=noise_model(p)).result()
                 probs_noisy = probs_counts(res.get_counts())
                 
-                # Calculate fidelity vs Analytical
-                # (We use the analytical solution as 'ground truth' to see when noise breaks the algorithm)
+                # Calculate fidelity Noisy vs Exact Solution
+                # (We use the analy exact solution as 'ground truth' to see when noise breaks the algorithm)
                 fid = self.get_fidelity(c_probs, probs_noisy)
                 fidelities.append(fid)
             
@@ -270,7 +270,7 @@ class HHL:
             plt.show()
 
 
-        print(f"\n  -> Simulating Quantum Circuit (with Noise pr0bability {p_error})...")
+        print(f"\n  -> Simulating Quantum Circuit (with Noise probability {p_error})...")
 
         # run simulator many times (shots)
         result_noise = simulator.run(qc_transpiled, shots=20000, noise_model=noise_model(p_error)).result()
@@ -280,7 +280,7 @@ class HHL:
 
         # --------- Fidelity --------------------------------------------
     
-        # Ideal vs Analytical
+        # Ideal vs Exact Solution
         # Measures how well the HHL (noiseless) approximates the mathematical solution
         fid_algo = self.get_fidelity(c_probs, q_probs)
         
@@ -288,14 +288,14 @@ class HHL:
         # Measures how much damage the noise caused to the quantum solution
         fid_noise = self.get_fidelity(q_probs, q_probs_noise)
 
-        # Noisy vs Analytical 
+        # Noisy vs Exact Solution 
         # Measures how much damage the noise caused to the analytical solution, which is what will happen in a real device
         fid_noise = self.get_fidelity(c_probs, q_probs_noise)
 
         print(f"\n--- FIDELITY RESULTS ---")
-        print(f" Algorithm (Ideal vs Analytical): {fid_algo:.4f}")
+        print(f" Algorithm (Ideal vs Exact Solution): {fid_algo:.4f}")
         print(f" Robustness (Ideal vs Noisy): {fid_noise:.4f}")
-        print(f" Possible real experiment (Noisy vs Analytical): {fid_noise:.4f}")
+        print(f" Possible real experiment (Noisy vs Exact Solution): {fid_noise:.4f}")
 
 
         #plot all results 
@@ -303,20 +303,21 @@ class HHL:
 
     def _plot(self, c_probs, q_probs, q_probs_noise, title):
         x = np.arange(len(c_probs))
-        width = 0.35
+        width = 0.16
         
         #create figure
         fig, ax = plt.subplots(figsize=(8, 4))
         
-        ax.bar(x - width/2, c_probs, width, label='Analytical (True)', color='navy')
-        ax.bar(x, q_probs, width, label='HHL (Quantum)', color='cornflowerblue')
-        ax.bar(x + width/2, q_probs_noise, width, label='HHL with Noise (Quantum)', color='green')
+        ax.bar(x - width, c_probs, width, label='Exact Solution', color='green')
+        ax.bar(x, q_probs, width, label='Ideal HHL', color='blue')
+        ax.bar(x + width, q_probs_noise, width, label='Noisy HHL', color='red')
         
         ax.set_title(title)
         ax.set_ylabel('Probability |x|^2')
         ax.set_xlabel('Basis State')
         ax.legend()
         ax.grid(linestyle='--', alpha=0.7)
+        ax.set_xticks(x)
         
         #SAVE FIGURES-----------------------------------------------------------------------------------
         #create a 'results' folder
