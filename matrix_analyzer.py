@@ -1,10 +1,10 @@
 import numpy as np
+
 """
 This program computes the eigenvalues and condition number (k) of the matrices used to benchmark the HHL algorithm 
 in the Jupyter Notebook. In order to work well, matrices must be positive-definite (positive eigenvalues) hermitian.
 Kappa should be kept as low as possible to maximize performance 
 """
-
 #print only 4 decimals
 np.set_printoptions(precision=4, suppress=True)
 

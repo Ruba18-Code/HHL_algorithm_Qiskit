@@ -211,14 +211,33 @@ class HHL:
     def _plot(self, c_probs, q_probs, title):
         x = np.arange(len(c_probs))
         width = 0.35
+        
+        #create figure
         fig, ax = plt.subplots(figsize=(8, 4))
+        
         ax.bar(x - width/2, c_probs, width, label='Analytical (True)', color='navy')
         ax.bar(x + width/2, q_probs, width, label='HHL (Quantum)', color='cornflowerblue')
+        
         ax.set_title(title)
         ax.set_ylabel('Probability |x|^2')
         ax.set_xlabel('Basis State')
         ax.legend()
-        plt.grid(linestyle='--', alpha=0.7)
+        ax.grid(linestyle='--', alpha=0.7)
+        
+        #SAVE FIGURES-----------------------------------------------------------------------------------
+        #create a 'results' folder
+        import os
+        if not os.path.exists('results'):
+            os.makedirs('results')
+
+        #format name properly
+        clean_filename = title.replace(" ", "_").replace("(", "").replace(")", "").replace("/", "-")
+        filename = f"results/{clean_filename}.pdf"
+        
+        #save figure as PDF
+        fig.savefig(filename, format='pdf', bbox_inches='tight')
+        
+        print(f"  [Saved] Plot saved as: {filename}")
         plt.show()
 
 # ==========================================
